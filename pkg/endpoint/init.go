@@ -8,4 +8,7 @@ import (
 	_ "github.com/k3s-io/kine/pkg/drivers/pgsql"
 	_ "github.com/k3s-io/kine/pkg/drivers/remote"
 	_ "github.com/k3s-io/kine/pkg/drivers/sqlite"
+
+	// Import the identity providers
+	_ "github.com/k3s-io/kine/pkg/identity/aws"
 )
