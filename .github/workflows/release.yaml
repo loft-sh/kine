@@ -9,7 +9,7 @@ on:
       kine_version:
         type: string
         description: Kine version tag for the image
-        default: 0.13.5
+        default: 0.14.10
         required: true
 
 jobs:
