@@ -83,8 +83,6 @@ jobs:
           target: multi-arch-package
           push: true
           tags: |
-            ${{ env.DOCKER_USERNAME }}/kine:latest
-            ${{ env.DOCKER_USERNAME }}/kine:${{ github.ref_name }}
             ghcr.io/${{ github.repository_owner }}/kine:latest
             ghcr.io/${{ github.repository_owner }}/kine:${{ github.ref_name }}
       
