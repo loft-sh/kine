@@ -1,4 +1,4 @@
-FROM golang:1.22-alpine3.20 AS infra
+FROM golang:1.25-alpine3.22 AS infra
 
 RUN apk -U add bash coreutils git gcc musl-dev vim less curl wget ca-certificates
 
