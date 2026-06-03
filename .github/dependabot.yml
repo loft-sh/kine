@@ -54,3 +54,29 @@ updates:
           - k8s.io/*
     ignore:
       - dependency-name: "*"
+
+  # Maintain dependencies for Go (e2e module)
+  - package-ecosystem: "gomod"
+    open-pull-requests-limit: 15
+    directory: "/e2e"
+    target-branch: "master" # see https://github.com/dependabot/dependabot-core/issues/1778#issuecomment-1988140219
+    labels:
+      - "kind/dependabot"
+    schedule:
+      interval: "weekly"
+    ignore:
+      - dependency-name: k8s.io/*
+
+   # Maintain dependencies for K8s monthly (e2e module)
+  - package-ecosystem: "gomod"
+    directory: "/e2e"
+    labels:
+      - "kind/dependabot"
+    schedule:
+      interval: "monthly"
+    groups:
+      k8s-dependencies:
+        patterns:
+          - k8s.io/*
+    ignore:
+      - dependency-name: "*"

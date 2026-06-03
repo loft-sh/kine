@@ -195,15 +195,13 @@ func Open(ctx context.Context, wg *sync.WaitGroup, driverName string, connector 
 		}
 	}
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		<-ctx.Done()
 		logrus.Infof("Closing database connections...")
 		if err := db.Close(); err != nil {
 			logrus.Errorf("Failed to close database: %v", err)
 		}
-	}()
+	})
 
 	configureConnectionPooling(connPoolConfig, db, driverName)
 
