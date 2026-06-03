@@ -38,3 +38,10 @@ package:
 
 .PHONY: ci
 ci: validate build package
+
+# Runs the PostgreSQL e2e suite (kind + Postgres + kine) covering both the
+# Kerberos/GSSAPI and the plain user/password auth paths.
+# Requires docker, kind, and kubectl on PATH.
+.PHONY: test-e2e
+test-e2e:
+	cd e2e && go test -timeout 25m -run TestRunKineE2E ./... -args --ginkgo.v
