@@ -6,6 +6,7 @@ require (
 	github.com/Rican7/retry v0.3.1
 	github.com/aws/aws-sdk-go-v2/config v1.31.12
 	github.com/aws/aws-sdk-go-v2/feature/rds/auth v1.6.9
+	github.com/go-krb5/krb5 v0.1.0
 	github.com/go-sql-driver/mysql v1.10.0
 	github.com/golang/protobuf v1.5.4
 	github.com/jackc/pgerrcode v0.0.0-20240316143900-6e2875d9b438
@@ -67,7 +68,9 @@ require (
 	github.com/expr-lang/expr v1.17.8 // indirect
 	github.com/fxamacker/cbor/v2 v2.9.0 // indirect
 	github.com/getsentry/sentry-go v0.27.0 // indirect
+	github.com/go-crypt/x v0.4.12 // indirect
 	github.com/go-ini/ini v1.67.0 // indirect
+	github.com/go-krb5/x v0.3.2 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-openapi/jsonpointer v0.21.0 // indirect
