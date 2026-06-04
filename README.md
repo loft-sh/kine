@@ -64,10 +64,13 @@ Fork releases are tagged `vX.Y.Z.vcluster.N`, where `vX.Y.Z` is the upstream rel
 
 There are two release workflows:
 
-- `release.yaml` (workflow name `Kine build`) fires on a `vX.Y.Z.vcluster.N` **tag push** and publishes the
-  multi-arch image `ghcr.io/loft-sh/kine:vX.Y.Z.vcluster.N` (with SBOM and provenance attestation).
+- `release.yaml` (workflow name `Kine build`) fires on a version **tag push** and publishes the multi-arch
+  image `ghcr.io/loft-sh/kine:<tag>` (with SBOM and provenance attestation).
 - `release.yml` (inherited from upstream) fires when a **GitHub Release is created** and uploads multi-arch
   binaries plus SHA256 checksums to that Release.
+
+In parallel, `version-policy.yaml` validates the pushed tag against the `vX.Y.Z.vcluster.N` scheme and fails
+its check if the tag does not conform, so a mis-named release tag is surfaced rather than published silently.
 
 To cut a new release line from a fresh upstream version:
 
@@ -85,7 +88,7 @@ git checkout -b release/vcluster/v0.16.2 v0.16.2
 # 4. Push the branch and the first fork tag
 git push origin release/vcluster/v0.16.2
 git tag v0.16.2.vcluster.0
-git push origin v0.16.2.vcluster.0          # fires release.yaml (Kine build)
+git push origin v0.16.2.vcluster.0          # fires release.yaml + version-policy.yaml
 
 # 5. Create the GitHub Release from the tag             # fires release.yml (binaries)
 ```
@@ -113,8 +116,9 @@ git log --oneline v<previous-upstream>..release/vcluster/<previous-version>
   product `(fork)` commits on PRs into `master`/`main`, rejects tooling `(fork)` commits there that touch
   non-allowlisted paths, and on PRs into `release/vcluster/v*` requires every commit to be a Conventional
   Commit with the `fork` scope.
-- **`release.yaml`** (`Kine build`) validates the pushed tag and refuses to publish an image unless the tag
-  matches `vX.Y.Z.vcluster.N`.
+- **`version-policy.yaml`** runs on every version tag push and fails if the tag does not match
+  `vX.Y.Z.vcluster.N`. It runs alongside `release.yaml` (which is left as-is) rather than gating it, so a
+  mis-named tag turns the check red instead of being blocked outright.
 
 Cutting the `release/vcluster/v*` branch from the correct upstream tag and replaying the full fork commit set
 (the replay rule) is not automated and remains a human responsibility.
