@@ -1,13 +1,9 @@
 name: Kine build
 
-# Fork image-release workflow: builds and publishes ghcr.io/loft-sh/kine on
-# fork release tags (vX.Y.Z.vcluster.N). Note: the upstream-inherited release.yml
-# (binaries + checksums on GitHub Release) is a separate, similarly named workflow.
-
 on:
   push:
     tags:
-      - 'v*.vcluster.*'
+      - v*
   workflow_dispatch:
     inputs:
       kine_version:
@@ -27,18 +23,6 @@ jobs:
       attestations: write
 
     steps:
-      - name: Validate release tag name
-        if: github.event_name == 'push'
-        env:
-          TAG: ${{ github.ref_name }}
-        run: |
-          set -euo pipefail
-          tag_re='^v[0-9]+\.[0-9]+\.[0-9]+\.vcluster\.[0-9]+$'
-          if [[ ! "$TAG" =~ $tag_re ]]; then
-            echo "::error::Release tag '$TAG' does not match the required vX.Y.Z.vcluster.N scheme (e.g. v0.16.2.vcluster.0)."
-            exit 1
-          fi
-          echo "Release tag '$TAG' OK."
       - name: Checkout
         uses: actions/checkout@v4
         with:
@@ -58,7 +42,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Determine version
         id: determine_version
-        run: echo "VERSION=${{ github.event.inputs.kine_version || github.ref_name }}" | sed 's/v//' >> "$GITHUB_ENV"
+        run: echo "VERSION=${{ github.event.inputs.kine_version || github.ref_name }}" | sed 's/v//' >> $GITHUB_ENV
       - name: Build and push
         id: push
         uses: docker/build-push-action@v6
