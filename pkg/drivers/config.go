@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/k3s-io/kine/pkg/drivers/generic"
+	"github.com/k3s-io/kine/pkg/identity"
 	"github.com/k3s-io/kine/pkg/tls"
 	"github.com/prometheus/client_golang/prometheus"
 )
@@ -24,6 +25,7 @@ type Config struct {
 	PollBatchSize         int64
 	PeerConfig            PeerConfig
 	S3Config              S3Config
+	TokenSource           identity.TokenSource
 }
 
 // PeerConfig and S3Config carry kine-server-shaped settings consumed by the
