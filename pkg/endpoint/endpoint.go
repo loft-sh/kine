@@ -14,6 +14,7 @@ import (
 	"github.com/golang/protobuf/proto"
 	"github.com/k3s-io/kine/pkg/drivers"
 	"github.com/k3s-io/kine/pkg/drivers/generic"
+	"github.com/k3s-io/kine/pkg/identity"
 	"github.com/k3s-io/kine/pkg/metrics"
 	"github.com/k3s-io/kine/pkg/server"
 	"github.com/k3s-io/kine/pkg/tls"
@@ -56,6 +57,7 @@ type Config struct {
 	LogFormat             string
 	PeerConfig            drivers.PeerConfig
 	S3Config              drivers.S3Config
+	IdentityProvider      string
 }
 
 type ETCDConfig struct {
@@ -73,6 +75,11 @@ func Listen(ctx context.Context, config Config) (etcd ETCDConfig, rerr error) {
 		}
 	}()
 
+	identityProvider, err := identity.New(bctx, config.IdentityProvider)
+	if err != nil {
+		return ETCDConfig{}, fmt.Errorf("failed to create identity provider for %s: %w", config.IdentityProvider, err)
+	}
+
 	leaderElect, backend, err := drivers.New(bctx, wg, &drivers.Config{
 		MetricsRegisterer:     config.MetricsRegisterer,
 		Endpoint:              config.Endpoint,
@@ -86,6 +93,7 @@ func Listen(ctx context.Context, config Config) (etcd ETCDConfig, rerr error) {
 		PollBatchSize:         config.PollBatchSize,
 		PeerConfig:            config.PeerConfig,
 		S3Config:              config.S3Config,
+		TokenSource:           identityProvider,
 	})
 
 	if err != nil {
