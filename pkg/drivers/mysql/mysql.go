@@ -13,6 +13,7 @@ import (
 	"sync"
 
 	"github.com/go-sql-driver/mysql"
+	"github.com/k3s-io/kine/pkg/identity"
 	"github.com/sirupsen/logrus"
 
 	"github.com/k3s-io/kine/pkg/dialer"
@@ -60,16 +61,7 @@ var (
 )
 
 func New(ctx context.Context, wg *sync.WaitGroup, cfg *drivers.Config) (bool, server.Backend, error) {
-	tlsConfig, err := cfg.BackendTLSConfig.ClientConfig()
-	if err != nil {
-		return false, nil, err
-	}
-
-	if tlsConfig != nil {
-		tlsConfig.MinVersion = cryptotls.VersionTLS11
-	}
-
-	config, err := prepareConfig(cfg.DataSourceName, tlsConfig)
+	config, err := prepareConfig(cfg)
 	if err != nil {
 		return false, nil, err
 	}
@@ -211,11 +203,11 @@ func createDBIfNotExist(ctx context.Context, config *mysql.Config, connector dri
 			}
 			createConfig := config.Clone()
 			createConfig.DBName = ""
-			connector, err = mysql.NewConnector(createConfig)
+			createConnector, err := mysql.NewConnector(createConfig)
 			if err != nil {
 				return err
 			}
-			db = sql.OpenDB(connector)
+			db := sql.OpenDB(createConnector)
 			defer db.Close()
 			if _, err = db.ExecContext(ctx, stmt); err != nil {
 				return err
@@ -225,7 +217,17 @@ func createDBIfNotExist(ctx context.Context, config *mysql.Config, connector dri
 	return nil
 }
 
-func prepareConfig(dataSourceName string, tlsConfig *cryptotls.Config) (*mysql.Config, error) {
+func prepareConfig(cfg *drivers.Config) (*mysql.Config, error) {
+	tlsConfig, err := cfg.BackendTLSConfig.ClientConfig()
+	if err != nil {
+		return nil, err
+	}
+
+	if tlsConfig != nil {
+		tlsConfig.MinVersion = cryptotls.VersionTLS11
+	}
+
+	dataSourceName := cfg.DataSourceName
 	if len(dataSourceName) == 0 {
 		dataSourceName = defaultUnixDSN
 		if tlsConfig != nil {
@@ -249,6 +251,23 @@ func prepareConfig(dataSourceName string, tlsConfig *cryptotls.Config) (*mysql.C
 	}
 	config.DBName = dbName
 	config.DialFunc = dialer.CachingDialer.DialContext
+
+	if cfg.TokenSource != nil {
+		config.AllowCleartextPasswords = true
+		if err := config.Apply(mysql.BeforeConnect(func(ctx context.Context, config *mysql.Config) error {
+			token, err := cfg.TokenSource(ctx, identity.Config{
+				Endpoint: config.Addr,
+				User:     config.User,
+			})
+			if err != nil {
+				return err
+			}
+			config.Passwd = token
+			return nil
+		})); err != nil {
+			return nil, err
+		}
+	}
 
 	return config, nil
 }

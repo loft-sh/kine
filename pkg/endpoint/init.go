@@ -10,4 +10,7 @@ import (
 	_ "github.com/k3s-io/kine/pkg/drivers/split"
 	_ "github.com/k3s-io/kine/pkg/drivers/sqlite"
 	_ "github.com/k3s-io/kine/pkg/drivers/t4"
+
+	// Import the identity providers
+	_ "github.com/k3s-io/kine/pkg/identity/aws"
 )
