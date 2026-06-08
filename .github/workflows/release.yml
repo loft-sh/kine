@@ -11,12 +11,12 @@ jobs:
     env:
       ARCH: amd64
       TAG: ${{ github.ref_name }}
+      DOCKER_TOKEN: ${{ secrets.DOCKER_TOKEN }}
     permissions:
       contents: write # Needed to update release with binary assets
       packages: write # Needed for GHCR image push
       id-token: write # needed for the Vault authentication
-      attestations: write # needed for attest action
-      artifact-metadata: write # needed for attestation upload to GHCR
+      attestations: write # needed for attest action and attestation upload to GHCR
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
@@ -34,7 +34,7 @@ jobs:
           for a in "${arch[@]}"; do
             sha256sum kine-"${a}" > sha256sum-"${a}".txt
           done
-          
+
       - name: Attest binaries
         uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26 # v4
         with:
@@ -54,9 +54,9 @@ jobs:
           secrets: |
             secret/data/github/repo/${{ github.repository }}/dockerhub/rancher/credentials username | DOCKER_USERNAME ;
             secret/data/github/repo/${{ github.repository }}/dockerhub/rancher/credentials password | DOCKER_TOKEN ;
-    
+
       - name: Set DockerHub repo
-        if: github.repository_owner != 'k3s-io'
+        if: github.repository_owner != 'k3s-io' && env.DOCKER_TOKEN != ''
         run: |
           echo "DOCKER_USERNAME=${{ secrets.DOCKER_USERNAME }}" >> "$GITHUB_ENV"
 
@@ -69,12 +69,12 @@ jobs:
 
       # For forks, setup DockerHub login with GHA secrets
       - name: Login to DockerHub with GHA Secrets
-        if: github.repository_owner != 'k3s-io'
+        if: github.repository_owner != 'k3s-io' && env.DOCKER_TOKEN != ''
         uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
         with:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_TOKEN }}
-      
+
       - name: Login to GitHub Container Registry
         uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
         with:
@@ -91,11 +91,9 @@ jobs:
           target: multi-arch-package
           push: true
           tags: |
-            ${{ env.DOCKER_USERNAME }}/kine:latest
-            ${{ env.DOCKER_USERNAME }}/kine:${{ github.ref_name }}
             ghcr.io/${{ github.repository_owner }}/kine:latest
             ghcr.io/${{ github.repository_owner }}/kine:${{ github.ref_name }}
-      
+
       - name: Attest images
         uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26 # v4
         id: attest
