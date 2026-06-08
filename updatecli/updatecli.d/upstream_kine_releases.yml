@@ -93,6 +93,10 @@ actions:
         # Cherry-pick IAM authentication
         git cherry-pick fcf4e5a
 
+        # Cherry-pick release process update for loft-sh org
+        git cherry-pick fe2d5b9
+        git cherry-pick 01c2b02
+
         # Push and tag
         git push origin release-{{ source "latestUpstreamRelease" }}
         git tag v{{ source "latestUpstreamRelease" }}
