@@ -3,7 +3,6 @@ package pgsql
 import (
 	"context"
 	"database/sql"
-	"database/sql/driver"
 	"fmt"
 	"net/url"
 	"os"
@@ -19,6 +18,7 @@ import (
 	"github.com/k3s-io/kine/pkg/dialer"
 	"github.com/k3s-io/kine/pkg/drivers"
 	"github.com/k3s-io/kine/pkg/drivers/generic"
+	"github.com/k3s-io/kine/pkg/identity"
 	"github.com/k3s-io/kine/pkg/logstructured"
 	"github.com/k3s-io/kine/pkg/logstructured/sqllog"
 	"github.com/k3s-io/kine/pkg/query"
@@ -69,8 +69,9 @@ func New(ctx context.Context, wg *sync.WaitGroup, cfg *drivers.Config) (bool, se
 		return false, nil, err
 	}
 
-	connector := stdlib.GetConnector(*config)
-	if err := createDBIfNotExist(ctx, config, connector); err != nil {
+	opts := prepareOptions(cfg)
+	connector := stdlib.GetConnector(*config, opts...)
+	if err := createDBIfNotExist(ctx, cfg, config); err != nil {
 		return false, nil, err
 	}
 
@@ -179,10 +180,10 @@ func setup(db *sql.DB) error {
 	return nil
 }
 
-func createDBIfNotExist(ctx context.Context, config *pgx.ConnConfig, connector driver.Connector) error {
+func createDBIfNotExist(ctx context.Context, cfg *drivers.Config, config *pgx.ConnConfig) error {
 	createConfig := config.Copy()
 	createConfig.Database = "postgres"
-	connector = stdlib.GetConnector(*createConfig)
+	connector := stdlib.GetConnector(*createConfig, prepareOptions(cfg)...)
 	conn, err := connector.Connect(ctx)
 	if err != nil {
 		logrus.Warnf("failed to ensure existence of database %s: unable to connect to default postgres database: %v", createConfig.Database, err)
@@ -261,6 +262,24 @@ func prepareConfig(dataSourceName string, tlsInfo tls.Config) (*pgx.ConnConfig, 
 	}
 	config.DialFunc = dialer.CachingDialer.DialContext
 	return config, nil
+}
+
+func prepareOptions(cfg *drivers.Config) []stdlib.OptionOpenDB {
+	var opts []stdlib.OptionOpenDB
+	if cfg.TokenSource != nil {
+		opts = append(opts, stdlib.OptionBeforeConnect(func(ctx context.Context, config *pgx.ConnConfig) error {
+			token, err := cfg.TokenSource(ctx, identity.Config{
+				Endpoint: config.Host + ":" + strconv.Itoa(int(config.Port)),
+				User:     config.User,
+			})
+			if err != nil {
+				return err
+			}
+			config.Password = token
+			return nil
+		}))
+	}
+	return opts
 }
 
 func init() {
