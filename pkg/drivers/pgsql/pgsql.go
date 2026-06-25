@@ -31,6 +31,15 @@ import (
 
 const (
 	defaultDSN = "postgres://postgres:postgres@localhost/"
+
+	// lockTimeoutEnv overrides defaultLockTimeout (a Go duration, e.g. "5s"; "0" disables).
+	lockTimeoutEnv = "KINE_PG_LOCK_TIMEOUT"
+
+	// defaultLockTimeout bounds how long a statement waits on a row lock. The watch poll fills
+	// gaps in the id sequence with an INSERT at the missing id; if a transaction holds that id,
+	// an unbounded wait blocks the single poll goroutine and stalls every watcher. Bounding it
+	// lets the poll self-heal; normal writes never wait this long on a lock.
+	defaultLockTimeout = 10 * time.Second
 )
 
 var (
@@ -74,6 +83,9 @@ func New(ctx context.Context, wg *sync.WaitGroup, cfg *drivers.Config) (bool, se
 	if err != nil {
 		return false, nil, err
 	}
+
+	// Bound lock waits so a held id gap can't stall the watch poll (see defaultLockTimeout).
+	ensureLockTimeout(config)
 
 	if err := createDBIfNotExist(cfg, config); err != nil {
 		return false, nil, err
@@ -306,6 +318,33 @@ func prepareDSN(dataSourceName string, tlsInfo tls.Config) (string, error) {
 	}
 	u.RawQuery = params.Encode()
 	return u.String(), nil
+}
+
+// ensureLockTimeout sets lock_timeout on every connection (via pgx RuntimeParams), unless the
+// operator already set one in the DSN.
+func ensureLockTimeout(config *pgxpool.Config) {
+	if config.ConnConfig.RuntimeParams == nil {
+		config.ConnConfig.RuntimeParams = map[string]string{}
+	}
+	if _, ok := config.ConnConfig.RuntimeParams["lock_timeout"]; ok {
+		return
+	}
+	config.ConnConfig.RuntimeParams["lock_timeout"] = lockTimeoutMillis()
+}
+
+// lockTimeoutMillis returns lock_timeout in milliseconds (the bare value Postgres expects), from
+// KINE_PG_LOCK_TIMEOUT or defaultLockTimeout.
+func lockTimeoutMillis() string {
+	d := defaultLockTimeout
+	if v := os.Getenv(lockTimeoutEnv); v != "" {
+		parsed, err := time.ParseDuration(v)
+		if err != nil {
+			logrus.Warnf("invalid %s %q, using default %s: %v", lockTimeoutEnv, v, defaultLockTimeout, err)
+		} else {
+			d = parsed
+		}
+	}
+	return strconv.FormatInt(d.Milliseconds(), 10)
 }
 
 func prepareOptions(cfg *drivers.Config) []stdlib.OptionOpenDB {
