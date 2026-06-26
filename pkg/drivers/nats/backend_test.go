@@ -64,6 +64,26 @@ func expEqualKeys(t *testing.T, want []string, got []*kserver.KeyValue) {
 	}
 }
 
+// waitRev waits until the backend's store revision reaches wantRev. The NATS KV index that backs
+// Count/List/Get is eventually consistent, so asserting immediately after a write (with only a
+// short fixed sleep) races under load and can miss the most recent write(s).
+func waitRev(t *testing.T, b *Backend, wantRev int64) {
+	t.Helper()
+	ctx := context.Background()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		srev, _, err := b.Count(ctx, "/", "", 0)
+		noErr(t, err)
+		if srev >= wantRev {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("store revision did not reach %d within timeout (last seen %d)", wantRev, srev)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
 func setupBackend(t *testing.T) (*server.Server, *nats.Conn, *Backend) {
 	ns := test.RunServer(&server.Options{
 		Port:      -1,
@@ -127,7 +147,7 @@ func TestBackend_Create(t *testing.T) {
 	noErr(t, err)
 	expEqual(t, 4, rev)
 
-	time.Sleep(2 * time.Millisecond)
+	waitRev(t, b, 4)
 
 	srev, count, err := b.Count(ctx, "/", "", 0)
 	noErr(t, err)
@@ -147,7 +167,7 @@ func TestBackend_Create(t *testing.T) {
 	noErr(t, err)
 	expEqual(t, 6, rev)
 
-	time.Sleep(2 * time.Millisecond)
+	waitRev(t, b, 6)
 
 	srev, count, err = b.Count(ctx, "/", "", 0)
 	noErr(t, err)
@@ -166,7 +186,7 @@ func TestBackend_Get(t *testing.T) {
 	rev, err := b.Create(ctx, "/a", []byte("b"), 1)
 	noErr(t, err)
 
-	time.Sleep(2 * time.Millisecond)
+	waitRev(t, b, 1)
 
 	srev, ent, err := b.Get(ctx, "/a", "", 0, 0, false)
 	noErr(t, err)
@@ -300,8 +320,8 @@ func TestBackend_List(t *testing.T) {
 	b.Create(ctx, "/d/a", nil, 0)
 	b.Create(ctx, "/d/b", nil, 0)
 
-	// Wait for the btree to be updated.
-	time.Sleep(time.Millisecond)
+	// Wait for the index to reflect all writes.
+	waitRev(t, b, 7)
 
 	// List the keys.
 	rev, ents, err := b.List(ctx, "/", "", 0, 0, false)
