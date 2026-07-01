@@ -35,6 +35,15 @@ var (
 		Name: "kine_insert_errors_total",
 		Help: "Total number of insert retries due to unique constraint violations",
 	}, []string{"retriable"})
+
+	// GapFillTotal counts how the watch poll resolves a gap in the revision sequence:
+	// "filled" (placeholder inserted), "failed" (fill aborted, e.g. by lock_timeout; retried on the
+	// next poll), or "skipped" (skip-ahead fallback). A rising "failed" rate that never settles
+	// indicates the poll is not self-healing (e.g. a too-short lock_timeout or sustained contention).
+	GapFillTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "kine_gap_fill_total",
+		Help: "Total number of watch poll sequence-gap fill outcomes by result",
+	}, []string{"result"})
 )
 
 var (
