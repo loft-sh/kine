@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/k3s-io/kine/pkg/tls"
 	"github.com/sirupsen/logrus"
 	logtest "github.com/sirupsen/logrus/hooks/test"
@@ -203,4 +204,26 @@ func entryMessages(hook *logtest.Hook) []string {
 		msgs = append(msgs, e.Message)
 	}
 	return msgs
+}
+
+func TestEnsureLockTimeout(t *testing.T) {
+	// Applies the default when the DSN does not set one.
+	cfg, err := pgx.ParseConfig("postgres://user:pass@localhost:5432/kine?sslmode=disable")
+	if err != nil {
+		t.Fatalf("parse config: %v", err)
+	}
+	ensureLockTimeout(cfg)
+	if got := cfg.RuntimeParams["lock_timeout"]; got != "10000" {
+		t.Fatalf("default lock_timeout = %q, want %q", got, "10000")
+	}
+
+	// Respects an operator-supplied value from the DSN.
+	cfg2, err := pgx.ParseConfig("postgres://user:pass@localhost:5432/kine?sslmode=disable&lock_timeout=3000")
+	if err != nil {
+		t.Fatalf("parse config: %v", err)
+	}
+	ensureLockTimeout(cfg2)
+	if got := cfg2.RuntimeParams["lock_timeout"]; got != "3000" {
+		t.Fatalf("operator lock_timeout = %q, want %q (must not be overridden)", got, "3000")
+	}
 }

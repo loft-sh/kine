@@ -31,6 +31,13 @@ import (
 const (
 	defaultDSN = "postgres://postgres:postgres@localhost/"
 
+	// defaultLockTimeout bounds how long a statement waits on a row lock. The watch poll fills gaps
+	// in the id sequence with an INSERT at the missing id; if a transaction holds that id, an
+	// unbounded wait blocks the single poll goroutine and stalls every watcher. Bounding it lets the
+	// poll self-heal; normal writes never wait this long on a lock. Operators can override it per
+	// datasource with a lock_timeout query parameter in the DSN.
+	defaultLockTimeout = 10 * time.Second
+
 	// keytabParam is the kine-specific DSN query parameter carrying the path to
 	// a Kerberos keytab. Its presence enables GSSAPI authentication; it is
 	// stripped from the DSN before connecting so it is not forwarded to
@@ -98,6 +105,9 @@ func New(ctx context.Context, wg *sync.WaitGroup, cfg *drivers.Config) (bool, se
 		return false, nil, err
 	}
 	config.DialFunc = dialer.CachingDialer.DialContext
+
+	// Bound lock waits so a held id gap can't stall the watch poll (see defaultLockTimeout).
+	ensureLockTimeout(config)
 
 	// GSSAPI (Kerberos) authentication is enabled by a keytab (krb5_keytab /
 	// KRB5_KTNAME) or a credential cache (krb5_ccache) selected from the DSN;
@@ -168,7 +178,8 @@ func New(ctx context.Context, wg *sync.WaitGroup, cfg *drivers.Config) (bool, se
 		}
 		return startKey
 	}
-	if err := setup(dialect.DB); err != nil {
+
+	if err := setup(ctx, dialect.DB); err != nil {
 		return false, nil, err
 	}
 
@@ -176,11 +187,26 @@ func New(ctx context.Context, wg *sync.WaitGroup, cfg *drivers.Config) (bool, se
 	return true, logstructured.New(sqllog.New(dialect, cfg.CompactInterval, cfg.CompactIntervalJitter, cfg.CompactTimeout, cfg.CompactMinRetain, cfg.CompactBatchSize, cfg.PollBatchSize)), nil
 }
 
-func setup(db *sql.DB) error {
+func setup(ctx context.Context, db *sql.DB) error {
 	logrus.Infof("Configuring database table schema and indexes, this may take a moment...")
+
+	// Run schema setup and migrations on a dedicated connection with lock_timeout disabled. The
+	// operational lock_timeout (see defaultLockTimeout) must not abort DDL such as the ALTER TABLE
+	// row-rewrite, which legitimately waits for an AccessExclusiveLock during a rolling upgrade.
+	// RESET restores the connection's startup value before it returns to the pool.
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	if _, err := conn.ExecContext(ctx, "SET lock_timeout = 0"); err != nil {
+		return err
+	}
+	defer func() { _, _ = conn.ExecContext(ctx, "RESET lock_timeout") }()
+
 	var version string
 	collationSupported := true
-	if err := db.QueryRow("select version()").Scan(&version); err == nil && strings.Contains(strings.ToLower(version), "cockroachdb") {
+	if err := conn.QueryRowContext(ctx, "select version()").Scan(&version); err == nil && strings.Contains(strings.ToLower(version), "cockroachdb") {
 		// CockroadDB does not seem to support "C" as a collation
 		// It looks like it's using golang.org/x/text/language and ends up calling something like v, err := language.Parse("C")
 		// which parses it as a BCP47 language tag instead of a collation.
@@ -192,7 +218,7 @@ func setup(db *sql.DB) error {
 			stmt = strings.ReplaceAll(stmt, ` COLLATE "C"`, "")
 		}
 		logrus.Tracef("SETUP EXEC : %v", query.Strip(stmt))
-		if _, err := db.Exec(stmt); err != nil {
+		if _, err := conn.ExecContext(ctx, stmt); err != nil {
 			return err
 		}
 	}
@@ -212,7 +238,7 @@ func setup(db *sql.DB) error {
 			continue
 		}
 		logrus.Tracef("SETUP EXEC MIGRATION %d: %v", i, query.Strip(stmt))
-		if _, err := db.Exec(stmt); err != nil {
+		if _, err := conn.ExecContext(ctx, stmt); err != nil {
 			return err
 		}
 	}
@@ -368,6 +394,19 @@ func keytabFromEnv() string {
 		return ""
 	}
 	return keytab
+}
+
+// ensureLockTimeout sets the default lock_timeout on every connection (via pgx RuntimeParams),
+// unless the operator already supplied one through the DSN. See defaultLockTimeout for the rationale.
+func ensureLockTimeout(config *pgx.ConnConfig) {
+	if config.RuntimeParams == nil {
+		config.RuntimeParams = map[string]string{}
+	}
+	if _, ok := config.RuntimeParams["lock_timeout"]; ok {
+		return // operator-provided value in the DSN takes precedence
+	}
+	// Postgres expects the bare value in milliseconds.
+	config.RuntimeParams["lock_timeout"] = strconv.FormatInt(defaultLockTimeout.Milliseconds(), 10)
 }
 
 func prepareOptions(cfg *drivers.Config) []stdlib.OptionOpenDB {
