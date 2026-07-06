@@ -544,6 +544,7 @@ func (s *SQLLog) poll(result chan server.Events, pollStart int64) {
 				if canSkipRevision(next, skip, skipTime) {
 					// This situation should never happen, but we have it here as a fallback just for unknown reasons
 					// we don't want to pause all watches forever
+					metrics.GapFillTotal.WithLabelValues("skipped").Inc()
 					logrus.Errorf("GAP %s, revision=%d, delete=%v, next=%d", event.KV.Key, event.KV.ModRevision, event.Delete, next)
 				} else if skip != next {
 					// This is the first time we have encountered this missing revision, so record time start
@@ -563,12 +564,14 @@ func (s *SQLLog) poll(result chan server.Events, pollStart int64) {
 					break
 				} else {
 					if err := s.d.Fill(s.ctx, next); err == nil {
+						metrics.GapFillTotal.WithLabelValues("filled").Inc()
 						logrus.Tracef("FILL, revision=%d, err=%v", next, err)
 						select {
 						case s.notify <- next:
 						default:
 						}
 					} else {
+						metrics.GapFillTotal.WithLabelValues("failed").Inc()
 						logrus.Tracef("FILL FAILED, revision=%d, err=%v", next, err)
 					}
 					break
