@@ -3,7 +3,6 @@ package endpoint_test
 import (
 	"context"
 	"fmt"
-	"net/url"
 	"os"
 	"sync"
 	"testing"
@@ -27,12 +26,13 @@ func TestWatchGapDoesNotStallPostgres(t *testing.T) {
 		t.Skipf("set %s to a Postgres DSN to run this test", watchGapEnv)
 	}
 
-	const holdDuration = 15 * time.Second
-	const maxFreeze = 8 * time.Second
+	const holdDuration = 20 * time.Second
+	const maxFreeze = 13 * time.Second
 
-	// Bound the lock wait well under the hold (via the DSN, the operator-facing knob) so a
-	// regression to an unbounded wait fails the assertion. The driver default is 10s.
-	kineDSN := withLockTimeout(t, dsn, "2000")
+	// Use the plain DSN and let ensureLockTimeout apply the 10s default. This exercises kine's
+	// default-application path rather than pgx's handling of a DSN lock_timeout: unfixed code blocks
+	// the gap-fill for the holder's full duration (freeze >= maxFreeze), while the fix self-heals at
+	// ~10s, well under maxFreeze.
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -41,7 +41,7 @@ func TestWatchGapDoesNotStallPostgres(t *testing.T) {
 	wg := &sync.WaitGroup{}
 	etcdCfg, err := endpoint.Listen(ctx, endpoint.Config{
 		Listener:            "tcp://127.0.0.1:0",
-		Endpoint:            kineDSN,
+		Endpoint:            dsn,
 		WaitGroup:           wg,
 		NotifyInterval:      1 * time.Second,
 		EmulatedETCDVersion: "3.5.13",
@@ -198,17 +198,4 @@ func waitStableRev(t *testing.T, getRev func() int64) int64 {
 	}
 	t.Fatalf("revision did not stabilize within timeout (last %d)", last)
 	return 0
-}
-
-// withLockTimeout returns dsn with a lock_timeout query parameter (in milliseconds) added.
-func withLockTimeout(t *testing.T, dsn, ms string) string {
-	t.Helper()
-	u, err := url.Parse(dsn)
-	if err != nil {
-		t.Fatalf("parse dsn: %v", err)
-	}
-	q := u.Query()
-	q.Set("lock_timeout", ms)
-	u.RawQuery = q.Encode()
-	return u.String()
 }
