@@ -122,16 +122,13 @@ func q(sql, param string, numbered bool) string {
 }
 
 func (d *Generic) Migrate(ctx context.Context) {
-	var (
-		count     = 0
-		countKV   = d.queryRow(ctx, "SELECT COUNT(*) FROM key_value")
-		countKine = d.queryRow(ctx, "SELECT COUNT(*) FROM kine")
-	)
+	var count int
 
+	countKV := d.queryRow(ctx, "SELECT COUNT(*) FROM key_value")
 	if err := countKV.Scan(&count); err != nil || count == 0 {
 		return
 	}
-
+	countKine := d.queryRow(ctx, "SELECT COUNT(*) FROM kine")
 	if err := countKine.Scan(&count); err != nil || count != 0 {
 		return
 	}
