@@ -18,15 +18,15 @@ jobs:
     if: github.ref == 'refs/heads/master'
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       - name: Install Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version: 'stable'
 
       - name: Install Updatecli
-        uses: updatecli/updatecli-action@v2
+        uses: updatecli/updatecli-action@6bfb9f2e6b20bfb283f94627d2f24659b8f38b8e # v2
 
       - name: Delete leftover UpdateCLI branches
         run: |

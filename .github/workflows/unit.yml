@@ -14,7 +14,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-    - uses: actions/checkout@v5
+    - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
     - name: Go Unit Tests
       run: go test -cover -tags=test ./...
     - name: Go Unit Tests (nocgo)
@@ -39,7 +39,7 @@ jobs:
           --health-timeout 5s
           --health-retries 5
     steps:
-    - uses: actions/checkout@v5
+    - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
     - name: Watch-gap regression test
       run: go test -count=1 -run TestWatchGapDoesNotStallPostgres ./pkg/endpoint/
       env:
