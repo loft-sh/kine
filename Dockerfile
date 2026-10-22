@@ -1,10 +1,10 @@
 
-FROM golang:1.24-alpine3.22 AS infra
+FROM golang:1.26.10-alpine3.24 AS infra
 ARG ARCH=amd64
 
 RUN apk -U add bash coreutils git gcc musl-dev vim less curl wget ca-certificates
 RUN GOPROXY=direct go install golang.org/x/tools/cmd/goimports@gopls/v0.20.0
-RUN curl -sL https://raw.githubusercontent.com/golangci/golangci-lint/refs/tags/v2.7.2/install.sh | sh -s -- v2.7.2
+RUN curl -sL https://raw.githubusercontent.com/golangci/golangci-lint/refs/tags/v2.10.1/install.sh | sh -s -- v2.10.1
 WORKDIR /go/src/github.com/k3s-io/kine
 
 # Validate needs everything in the project, so we separate it out for better caching
@@ -46,7 +46,7 @@ ENTRYPOINT ["/bin/kine"]
 
 FROM --platform=$BUILDPLATFORM tonistiigi/xx AS xx
 
-FROM --platform=$BUILDPLATFORM golang:1.24-alpine3.22 AS multi-arch-build
+FROM --platform=$BUILDPLATFORM golang:1.26.10-alpine3.24 AS multi-arch-build
 COPY --from=xx / /
 ARG TAG
 ARG DIRTY
