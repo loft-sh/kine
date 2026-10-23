@@ -1,5 +1,5 @@
 
-FROM golang:1.24-alpine3.22 AS infra
+FROM golang:1.26.10-alpine3.24 AS infra
 ARG ARCH=amd64
 
 RUN apk -U add bash coreutils git gcc musl-dev vim less curl wget ca-certificates
@@ -8,7 +8,7 @@ RUN apk -U add bash coreutils git gcc musl-dev vim less curl wget ca-certificate
 RUN go install golang.org/x/tools/cmd/goimports@cd70d50baa6daa949efa12e295e10829f3a7bd46
 RUN rm -rf /go/src /go/pkg
 RUN if [ "${ARCH}" == "amd64" ]; then \
-    curl -sL https://raw.githubusercontent.com/golangci/golangci-lint/refs/tags/v1.64.8/install.sh | sh -s -- v1.64.8;  \
+    curl -sL https://raw.githubusercontent.com/golangci/golangci-lint/refs/tags/v2.10.1/install.sh | sh -s -- v2.10.1;  \
     fi
 
 ENV SRC_DIR=/go/src/github.com/k3s-io/kine
@@ -34,7 +34,7 @@ COPY ./scripts/build ./scripts/version ./scripts/
 COPY ./go.mod ./go.sum ./main.go ./
 COPY ./pkg ./pkg
 COPY ./.git ./.git
-COPY ./.golangci.json ./.golangci.json
+COPY ./.golangci.yml ./.golangci.yml
 
 RUN --mount=type=cache,id=gomod,target=/go/pkg/mod \
     --mount=type=cache,id=gobuild,target=/root/.cache/go-build \
@@ -55,7 +55,7 @@ ENTRYPOINT ["/bin/kine"]
 
 FROM --platform=$BUILDPLATFORM tonistiigi/xx AS xx
 
-FROM --platform=$BUILDPLATFORM golang:1.24-alpine3.22 AS multi-arch-build
+FROM --platform=$BUILDPLATFORM golang:1.26.10-alpine3.24 AS multi-arch-build
 COPY --from=xx / /
 ARG TAG
 ARG DIRTY
@@ -74,7 +74,7 @@ COPY ./scripts/buildx ./scripts/version ./scripts/
 COPY ./go.mod ./go.sum ./main.go ./
 COPY ./pkg ./pkg
 COPY ./.git ./.git
-COPY ./.golangci.json ./.golangci.json
+COPY ./.golangci.yml ./.golangci.yml
 
 RUN --mount=type=cache,id=gomod,target=/go/pkg/mod \
     ./scripts/buildx
