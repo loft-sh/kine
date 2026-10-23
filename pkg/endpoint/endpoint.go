@@ -147,13 +147,11 @@ func Listen(ctx context.Context, config Config) (etcd ETCDConfig, rerr error) {
 		return ETCDConfig{}, errors.Wrap(err, "creating listener")
 	}
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		if err := grpcServer.Serve(listener); err != nil && !errors.Is(err, context.Canceled) {
 			logrus.Errorf("Kine GPRC server exited: %v", err)
 		}
-	}()
+	})
 
 	endpoint := endpointURL(config, listener)
 	logrus.Infof("Kine available at %s", endpoint)
