@@ -1,6 +1,6 @@
 module github.com/k3s-io/kine
 
-go 1.25.1
+go 1.26.10
 
 require (
 	github.com/Rican7/retry v0.3.1
