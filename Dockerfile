@@ -1,15 +1,15 @@
 
-FROM golang:1.25-alpine3.23 AS infra
+FROM golang:1.26.10-alpine3.24 AS infra
 ARG ARCH=amd64
 
 RUN apk -U add bash coreutils git gcc musl-dev vim less curl wget ca-certificates
 # goimports version gopls/v0.20.0
 # https://github.com/golang/tools/releases/tag/gopls%2Fv0.20.0
 RUN GOPROXY=direct go install golang.org/x/tools/cmd/goimports@2e31135b736b96cd609904370c71563ce5447826
-RUN GOLANGCI_VERSION=v2.7.2 && \
+RUN GOLANGCI_VERSION=v2.10.1 && \
     case "${ARCH}" in \
-        amd64) GOLANGCI_SHA256="ce46a1f1d890e7b667259f70bb236297f5cf8791a9b6b98b41b283d93b5b6e88" ;; \
-        arm64) GOLANGCI_SHA256="7028e810837722683dab679fb121336cfa303fecff39dfe248e3e36bc18d941b" ;; \
+        amd64) GOLANGCI_SHA256="dfa775874cf0561b404a02a8f4481fc69b28091da95aa697259820d429b09c99" ;; \
+        arm64) GOLANGCI_SHA256="6652b42ae02915eb2f9cb2a2e0cac99514c8eded8388d88ae3e06e1a52c00de8" ;; \
         *) echo "Unsupported architecture for golangci-lint: ${ARCH}" && exit 1 ;; \
     esac && \
     cd /tmp && \
@@ -60,7 +60,7 @@ ENTRYPOINT ["/bin/kine"]
 
 FROM --platform=$BUILDPLATFORM tonistiigi/xx AS xx
 
-FROM --platform=$BUILDPLATFORM golang:1.25-alpine3.23 AS multi-arch-build
+FROM --platform=$BUILDPLATFORM golang:1.26.10-alpine3.24 AS multi-arch-build
 COPY --from=xx / /
 ARG TARGETOS
 ARG TARGETARCH
