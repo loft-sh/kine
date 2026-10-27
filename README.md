@@ -66,15 +66,14 @@ Fork releases are tagged `vX.Y.Z.vcluster.N`, where `vX.Y.Z` is the upstream rel
 `N` increments per fork release on that line. The first fork release of upstream `v0.16.2` is
 `v0.16.2.vcluster.0`, the next is `v0.16.2.vcluster.1`, and so on.
 
-There are two release workflows:
+`release.yml` is the only workflow that publishes. It fires on a version **tag push**, refuses a tag outside
+the `vX.Y.Z.vcluster.N` scheme, builds the multi-arch binaries and images from the tagged commit, attests both,
+pushes `ghcr.io/loft-sh/kine:<tag>` and `:<tag>-nocgo`, uploads the binaries and SHA256 checksums to a draft
+GitHub Release, and publishes that Release last. Do not create the Release in the UI: the workflow fails on a
+release that is already published, because published assets must not change. If a Release was created in the UI,
+the run fails before uploading anything: delete that Release, keep the tag, and re-run the workflow.
 
-- `release.yaml` (workflow name `Kine build`) fires on a version **tag push** and publishes the multi-arch
-  image `ghcr.io/loft-sh/kine:<tag>` (with SBOM and provenance attestation).
-- `release.yml` (inherited from upstream) fires when a **GitHub Release is created** and uploads multi-arch
-  binaries plus SHA256 checksums to that Release.
-
-In parallel, `version-policy.yaml` validates the pushed tag against the `vX.Y.Z.vcluster.N` scheme and fails
-its check if the tag does not conform, so a mis-named release tag is surfaced rather than published silently.
+`version-policy.yaml` also validates the pushed tag, so a mis-named tag shows as a failed check.
 
 To cut a new release line from a fresh upstream version:
 
@@ -92,9 +91,7 @@ git checkout -b release/vcluster/v0.16.2 v0.16.2
 # 4. Push the branch and the first fork tag
 git push origin release/vcluster/v0.16.2
 git tag v0.16.2.vcluster.0
-git push origin v0.16.2.vcluster.0          # fires release.yaml + version-policy.yaml
-
-# 5. Create the GitHub Release from the tag             # fires release.yml (binaries)
+git push origin v0.16.2.vcluster.0          # fires release.yml + version-policy.yaml
 ```
 
 For a follow-up release on an existing line, add the fix commits to the branch and push the next tag
@@ -121,8 +118,8 @@ git log --oneline v<previous-upstream>..release/vcluster/<previous-version>
   non-allowlisted paths, and on PRs into `release/vcluster/v*` requires every commit to be a Conventional
   Commit with the `fork` scope.
 - **`version-policy.yaml`** runs on every version tag push and fails if the tag does not match
-  `vX.Y.Z.vcluster.N`. It runs alongside `release.yaml` (which is left as-is) rather than gating it, so a
-  mis-named tag turns the check red instead of being blocked outright.
+  `vX.Y.Z.vcluster.N`. `release.yml` applies the same check before it builds, so a mis-named tag turns this
+  check red and publishes nothing.
 
 Cutting the `release/vcluster/v*` branch from the correct upstream tag and replaying the full fork commit set
 (the replay rule) is not automated and remains a human responsibility.
