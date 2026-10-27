@@ -1,8 +1,21 @@
 name: Release
+
+# The only workflow that publishes a fork release. Push a vX.Y.Z.vcluster.N
+# tag: the job builds and attests the binaries and images, uploads the
+# binaries to a draft release, and publishes the release last. Do not create
+# the release in the UI first; a published release fails the run, because its
+# assets must not change after publication.
 on:
-  release:
-    types:
-      - created
+  push:
+    tags:
+      - 'v*.vcluster.*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
 
 jobs:
   release:
@@ -11,15 +24,24 @@ jobs:
     env:
       ARCH: amd64
       TAG: ${{ github.ref_name }}
-      DOCKER_TOKEN: ${{ secrets.DOCKER_TOKEN }}
+      GH_REPO: ${{ github.repository }}
     permissions:
-      contents: write # Needed to update release with binary assets
+      contents: write # Needed to create the draft release and upload binary assets
       packages: write # Needed for GHCR image push
-      id-token: write # needed for the Vault authentication
-      attestations: write # needed for attest action and attestation upload to GHCR
+      id-token: write # Needed for the attestation signing certificate
+      attestations: write # Needed for attest action and attestation upload to GHCR
     steps:
+      - name: Validate release tag name
+        run: |
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+\.vcluster\.[0-9]+$ ]]; then
+            echo "::error::Release tag '$TAG' does not match the vX.Y.Z.vcluster.N scheme"
+            exit 1
+          fi
+
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v6
+        with:
+          persist-credentials: false
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4
@@ -44,47 +66,38 @@ jobs:
         with:
           subject-path: dist/artifacts/kine-*
 
-      - name: Upload binaries to release
-        uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3.0.1
-        with:
-          files: |
-            dist/artifacts/kine-*
-            dist/artifacts/*.txt
-
-      - name: "Read Vault secrets"
-        if: github.repository_owner == 'k3s-io'
-        uses: rancher-eio/read-vault-secrets@0da85151ad1f19ed7986c41587e45aac1ace74b6 # v3
-        with:
-          secrets: |
-            secret/data/github/repo/${{ github.repository }}/dockerhub/rancher/credentials username | DOCKER_USERNAME ;
-            secret/data/github/repo/${{ github.repository }}/dockerhub/rancher/credentials password | DOCKER_TOKEN ;
-
-      - name: Set DockerHub repo
-        if: github.repository_owner != 'k3s-io' && env.DOCKER_TOKEN != ''
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          echo "DOCKER_USERNAME=${{ secrets.DOCKER_USERNAME }}" >> "$GITHUB_ENV"
+          if draft=$(gh release view "$TAG" --json isDraft --jq .isDraft 2>/dev/null); then
+            if [[ "$draft" != "true" ]]; then
+              echo "::error::Release $TAG is already published and its assets must not change. Cut a new tag instead."
+              exit 1
+            fi
+            echo "Reusing draft release $TAG"
+            exit 0
+          fi
+          # Changelog from the previous fork release on this line, as the UI did.
+          n="${TAG##*.vcluster.}"
+          prev="${TAG%.*}.$((n - 1))"
+          start=()
+          if (( n > 0 )) && gh api "repos/$GH_REPO/git/ref/tags/$prev" >/dev/null 2>&1; then
+            start=(--notes-start-tag "$prev")
+          fi
+          gh release create "$TAG" --draft --verify-tag --title "$TAG" --generate-notes "${start[@]}"
 
-      - name: Login to DockerHub with Rancher Secrets
-        if: github.repository_owner == 'k3s-io'
-        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4
-        with:
-          username: ${{ env.DOCKER_USERNAME }}
-          password: ${{ env.DOCKER_TOKEN }}
-
-      # For forks, setup DockerHub login with GHA secrets
-      - name: Login to DockerHub with GHA Secrets
-        if: github.repository_owner != 'k3s-io' && env.DOCKER_TOKEN != ''
-        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4
-        with:
-          username: ${{ secrets.DOCKER_USERNAME }}
-          password: ${{ secrets.DOCKER_TOKEN }}
+      - name: Upload binaries to draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$TAG" dist/artifacts/kine-* dist/artifacts/*.txt --clobber
 
       - name: Login to GitHub Container Registry
         uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
-          password: ${{ secrets.GHCR_TOKEN }}
+          password: ${{ github.token }}
 
       - name: Build and push
         uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7
@@ -128,3 +141,8 @@ jobs:
           subject-name: ghcr.io/${{ github.repository_owner }}/kine
           subject-digest: ${{ steps.build-nocgo.outputs.digest }}
           push-to-registry: true
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release edit "$TAG" --draft=false
