@@ -66,7 +66,8 @@ Fork releases are tagged `vX.Y.Z.vcluster.N`, where `vX.Y.Z` is the upstream rel
 the `vX.Y.Z.vcluster.N` scheme, builds the multi-arch binaries and images from the tagged commit, attests both,
 pushes `ghcr.io/loft-sh/kine:<tag>`, uploads the binaries and SHA256 checksums to a draft
 GitHub Release, and publishes that Release last. Do not create the Release in the UI: the workflow fails on a
-release that is already published, because published assets must not change.
+release that is already published, because published assets must not change. If a Release was created in the UI,
+the run fails before uploading anything: delete that Release, keep the tag, and re-run the workflow.
 
 `version-policy.yaml` also validates the pushed tag, so a mis-named tag shows as a failed check.
 
