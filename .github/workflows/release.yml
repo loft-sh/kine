@@ -31,6 +31,13 @@ jobs:
       id-token: write # Needed for the attestation signing certificate
       attestations: write # Needed for attest action and attestation upload to GHCR
     steps:
+      - name: Check immutable image tags
+        uses: loft-sh/github-actions/.github/actions/ghcr-tag-guard@ghcr-tag-guard/v1
+        with:
+          images: |
+            ghcr.io/${{ github.repository_owner }}/kine:${{ github.ref_name }}
+            ghcr.io/${{ github.repository_owner }}/kine:${{ github.ref_name }}-nocgo
+
       - name: Validate release tag name
         run: |
           if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+\.vcluster\.[0-9]+$ ]]; then
