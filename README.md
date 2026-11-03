@@ -69,6 +69,8 @@ GitHub Release, and publishes that Release last. Do not create the Release in th
 release that is already published, because published assets must not change. If a Release was created in the UI,
 the run fails before uploading anything: delete that Release, keep the tag, and re-run the workflow.
 
+Draft release retries are allowed only while the immutable version image tags and its `-nocgo` variant are both absent from GHCR. If an image was pushed before a failure, cut a new tag or use a separately approved recovery. Do not delete or rebuild an existing version image. The GHCR guard requires the shared action to be merged and its `ghcr-tag-guard/v1` tag promoted before this workflow can publish.
+
 `version-policy.yaml` also validates the pushed tag, so a mis-named tag shows as a failed check.
 
 To cut a new release line from a fresh upstream version:
