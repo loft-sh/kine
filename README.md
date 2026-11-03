@@ -62,15 +62,26 @@ Fork releases are tagged `vX.Y.Z.vcluster.N`, where `vX.Y.Z` is the upstream rel
 `N` increments per fork release on that line. The first fork release of upstream `v0.16.2` is
 `v0.16.2.vcluster.0`, the next is `v0.16.2.vcluster.1`, and so on.
 
-There are two release workflows:
+`release.yml` is the only publisher. A version tag push starts it; creating a Release in the UI or
+dispatching the removed legacy workflow does not publish an image. It builds from the tagged checkout,
+uploads binaries to a draft Release, pushes and attests the images, then publishes the Release last.
+The clone-based `Dockerfile.release` publisher has been removed.
 
-- `release.yaml` (workflow name `Kine build`) fires on a version **tag push** and publishes the multi-arch
-  image `ghcr.io/loft-sh/kine:<tag>` (with SBOM and provenance attestation).
-- `release.yml` (inherited from upstream) fires when a **GitHub Release is created** and uploads multi-arch
-  binaries plus SHA256 checksums to that Release.
+Before any release work, the shared GHCR guard checks every version tag this workflow will push.
+An existing tag always fails, even on a retry. Auth failures, API errors, and ambiguous missing-tag
+responses fail closed. Runs for the same tag share one concurrency group with cancellation disabled.
+Draft retries are allowed only while all version image tags are absent. After a partial push, cut a
+new version or obtain separate recovery approval that preserves the published digests.
 
-In parallel, `version-policy.yaml` validates the pushed tag against the `vX.Y.Z.vcluster.N` scheme and fails
-its check if the tag does not conform, so a mis-named release tag is surfaced rather than published silently.
+The shared `ghcr-tag-guard/v1` action must be merged and its version tag published before these caller
+changes can be used for a release. A green caller PR does not prove that deployment step happened.
+
+`version-policy.yaml` and the publisher validate the `vX.Y.Z.vcluster.N` scheme. The offline
+`release-guard-test.yml` check verifies the actual tooling snapshot, including removal of both legacy
+triggers. Copy that check and the guarded publisher when creating a new release branch.
+
+See [release repair and rollback](docs/release-repair.md) for the approval boundary, evidence,
+Platform upgrade checks, and interrupted-run recovery.
 
 To cut a new release line from a fresh upstream version:
 
@@ -88,9 +99,7 @@ git checkout -b release/vcluster/v0.16.2 v0.16.2
 # 4. Push the branch and the first fork tag
 git push origin release/vcluster/v0.16.2
 git tag v0.16.2.vcluster.0
-git push origin v0.16.2.vcluster.0          # fires release.yaml + version-policy.yaml
-
-# 5. Create the GitHub Release from the tag             # fires release.yml (binaries)
+git push origin v0.16.2.vcluster.0          # fires release.yml + version-policy.yaml
 ```
 
 For a follow-up release on an existing line, add the fix commits to the branch and push the next tag
@@ -122,6 +131,11 @@ git log --oneline v<previous-upstream>..release/vcluster/<previous-version>
 
 Cutting the `release/vcluster/v*` branch from the correct upstream tag and replaying the full fork commit set
 (the replay rule) is not automated and remains a human responsibility.
+
+The replay must also carry the shared publication guard and `release-guard-test.yml`. Run
+`uv run --with pytest==8.3.5 --with PyYAML==6.0.2 pytest .github/tests/test_release_guard.py -q`
+on the new branch before pushing its first version tag. Use the previous maintained line's publisher
+so any `-nocgo` variant remains covered by the guard.
 
 ## Developer Documentation
 
