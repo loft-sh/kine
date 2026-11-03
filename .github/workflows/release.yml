@@ -32,7 +32,7 @@ jobs:
       attestations: write # Needed for attest action and attestation upload to GHCR
     steps:
       - name: Check immutable image tags
-        uses: loft-sh/github-actions/.github/actions/ghcr-tag-guard@ghcr-tag-guard/v1
+        uses: loft-sh/github-actions/.github/actions/ghcr-tag-guard@ghcr-tag-guard/v1 # zizmor: ignore[unpinned-uses] internal action version tag
         with:
           images: |
             ghcr.io/${{ github.repository_owner }}/kine:${{ github.ref_name }}
