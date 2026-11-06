@@ -3,7 +3,6 @@ package pgsql
 import (
 	"context"
 	"database/sql"
-	"database/sql/driver"
 	"fmt"
 	"net/url"
 	"os"
@@ -19,6 +18,7 @@ import (
 	"github.com/k3s-io/kine/pkg/dialer"
 	"github.com/k3s-io/kine/pkg/drivers"
 	"github.com/k3s-io/kine/pkg/drivers/generic"
+	"github.com/k3s-io/kine/pkg/identity"
 	"github.com/k3s-io/kine/pkg/logstructured"
 	"github.com/k3s-io/kine/pkg/logstructured/sqllog"
 	"github.com/k3s-io/kine/pkg/query"
@@ -30,6 +30,37 @@ import (
 
 const (
 	defaultDSN = "postgres://postgres:postgres@localhost/"
+
+	// defaultLockTimeout bounds how long a statement waits on a row lock. The watch poll fills gaps
+	// in the id sequence with an INSERT at the missing id; if a transaction holds that id, an
+	// unbounded wait blocks the single poll goroutine and stalls every watcher. Bounding it lets the
+	// poll self-heal; normal writes never wait this long on a lock. Operators can override it per
+	// datasource with a lock_timeout query parameter in the DSN.
+	defaultLockTimeout = 10 * time.Second
+
+	// keytabParam is the kine-specific DSN query parameter carrying the path to
+	// a Kerberos keytab. Its presence enables GSSAPI authentication; it is
+	// stripped from the DSN before connecting so it is not forwarded to
+	// PostgreSQL as a runtime parameter. It takes precedence over keytabEnvVar.
+	keytabParam = "krb5_keytab"
+
+	// keytabEnvVar is the standard Kerberos environment variable holding the
+	// keytab path, used as a fallback when keytabParam is absent. Its value may
+	// carry an optional "FILE:" type prefix, which is stripped.
+	keytabEnvVar = "KRB5_KTNAME"
+
+	// ccacheParam is the kine-specific DSN query parameter that enables GSSAPI
+	// authentication from a Kerberos credential cache. Its presence selects
+	// ccache mode; its value is an optional explicit cache path (an empty value
+	// resolves the cache from KRB5CCNAME, else the MIT default
+	// /tmp/krb5cc_<uid>). It is mutually exclusive with keytabParam and is
+	// stripped from the DSN before connecting.
+	//
+	// Unlike keytabParam there is no environment-variable fallback that turns
+	// ccache mode on: KRB5CCNAME only locates the cache once ccache mode is
+	// selected, it does not by itself enable GSSAPI. KRB5CCNAME is commonly
+	// present in an environment and must not silently hijack password auth.
+	ccacheParam = "krb5_ccache"
 )
 
 var (
@@ -88,13 +119,34 @@ var (
 )
 
 func New(ctx context.Context, wg *sync.WaitGroup, cfg *drivers.Config) (bool, server.Backend, error) {
-	config, err := prepareConfig(cfg.DataSourceName, cfg.BackendTLSConfig)
+	parsedDSN, krb, err := prepareDSN(cfg.DataSourceName, cfg.BackendTLSConfig)
 	if err != nil {
 		return false, nil, err
 	}
 
-	connector := stdlib.GetConnector(*config)
-	if err := createDBIfNotExist(ctx, config, connector); err != nil {
+	config, err := pgx.ParseConfig(parsedDSN)
+	if err != nil {
+		return false, nil, err
+	}
+	config.DialFunc = dialer.CachingDialer.DialContext
+
+	// Bound lock waits so a held id gap can't stall the watch poll (see defaultLockTimeout).
+	ensureLockTimeout(config)
+
+	// GSSAPI (Kerberos) authentication is enabled by a keytab (krb5_keytab /
+	// KRB5_KTNAME) or a credential cache (krb5_ccache) selected from the DSN;
+	// the client principal is carried in the DSN user-part. This must run after
+	// the DSN is parsed and before any connection is opened (createDBIfNotExist
+	// copies config, inheriting the rewritten user).
+	if krb.mode != krbDisabled {
+		if err := configureKerberos(krb, config); err != nil {
+			return false, nil, err
+		}
+	}
+
+	opts := prepareOptions(cfg)
+	connector := stdlib.GetConnector(*config, opts...)
+	if err := createDBIfNotExist(ctx, cfg, config); err != nil {
 		return false, nil, err
 	}
 
@@ -157,7 +209,8 @@ func New(ctx context.Context, wg *sync.WaitGroup, cfg *drivers.Config) (bool, se
 		}
 		return startKey
 	}
-	if err := setup(dialect.DB); err != nil {
+
+	if err := setup(ctx, dialect.DB); err != nil {
 		return false, nil, err
 	}
 
@@ -165,11 +218,26 @@ func New(ctx context.Context, wg *sync.WaitGroup, cfg *drivers.Config) (bool, se
 	return true, logstructured.New(sqllog.New(dialect, cfg.CompactInterval, cfg.CompactIntervalJitter, cfg.CompactTimeout, cfg.CompactMinRetain, cfg.CompactBatchSize, cfg.PollBatchSize)), nil
 }
 
-func setup(db *sql.DB) error {
+func setup(ctx context.Context, db *sql.DB) error {
 	logrus.Infof("Configuring database table schema and indexes, this may take a moment...")
+
+	// Run schema setup and migrations on a dedicated connection with lock_timeout disabled. The
+	// operational lock_timeout (see defaultLockTimeout) must not abort DDL such as the ALTER TABLE
+	// row-rewrite, which legitimately waits for an AccessExclusiveLock during a rolling upgrade.
+	// RESET restores the connection's startup value before it returns to the pool.
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	if _, err := conn.ExecContext(ctx, "SET lock_timeout = 0"); err != nil {
+		return err
+	}
+	defer func() { _, _ = conn.ExecContext(ctx, "RESET lock_timeout") }()
+
 	var version string
 	collationSupported := true
-	if err := db.QueryRow("select version()").Scan(&version); err == nil && strings.Contains(strings.ToLower(version), "cockroachdb") {
+	if err := conn.QueryRowContext(ctx, "select version()").Scan(&version); err == nil && strings.Contains(strings.ToLower(version), "cockroachdb") {
 		// CockroadDB does not seem to support "C" as a collation
 		// It looks like it's using golang.org/x/text/language and ends up calling something like v, err := language.Parse("C")
 		// which parses it as a BCP47 language tag instead of a collation.
@@ -181,7 +249,7 @@ func setup(db *sql.DB) error {
 			stmt = strings.ReplaceAll(stmt, ` COLLATE "C"`, "")
 		}
 		logrus.Tracef("SETUP EXEC : %v", query.Strip(stmt))
-		if _, err := db.Exec(stmt); err != nil {
+		if _, err := conn.ExecContext(ctx, stmt); err != nil {
 			return err
 		}
 	}
@@ -201,7 +269,7 @@ func setup(db *sql.DB) error {
 			continue
 		}
 		logrus.Tracef("SETUP EXEC MIGRATION %d: %v", i, query.Strip(stmt))
-		if _, err := db.Exec(stmt); err != nil {
+		if _, err := conn.ExecContext(ctx, stmt); err != nil {
 			return err
 		}
 	}
@@ -210,10 +278,10 @@ func setup(db *sql.DB) error {
 	return nil
 }
 
-func createDBIfNotExist(ctx context.Context, config *pgx.ConnConfig, connector driver.Connector) error {
+func createDBIfNotExist(ctx context.Context, cfg *drivers.Config, config *pgx.ConnConfig) error {
 	createConfig := config.Copy()
 	createConfig.Database = "postgres"
-	connector = stdlib.GetConnector(*createConfig)
+	connector := stdlib.GetConnector(*createConfig, prepareOptions(cfg)...)
 	conn, err := connector.Connect(ctx)
 	if err != nil {
 		logrus.Warnf("failed to ensure existence of database %s: unable to connect to default postgres database: %v", createConfig.Database, err)
@@ -242,7 +310,7 @@ func createDBIfNotExist(ctx context.Context, config *pgx.ConnConfig, connector d
 	return nil
 }
 
-func prepareConfig(dataSourceName string, tlsInfo tls.Config) (*pgx.ConnConfig, error) {
+func prepareDSN(dataSourceName string, tlsInfo tls.Config) (dsn string, krb krbAuth, err error) {
 	if len(dataSourceName) == 0 {
 		dataSourceName = defaultDSN
 	} else {
@@ -250,7 +318,7 @@ func prepareConfig(dataSourceName string, tlsInfo tls.Config) (*pgx.ConnConfig, 
 	}
 	u, err := util.ParseURL(dataSourceName)
 	if err != nil {
-		return nil, err
+		return "", krbAuth{}, err
 	}
 	if len(u.Path) == 0 || u.Path == "/" {
 		u.Path = "/kubernetes"
@@ -262,8 +330,17 @@ func prepareConfig(dataSourceName string, tlsInfo tls.Config) (*pgx.ConnConfig, 
 
 	queryMap, err := url.ParseQuery(u.RawQuery)
 	if err != nil {
-		return nil, err
+		return "", krbAuth{}, err
 	}
+
+	// Resolve the GSSAPI (Kerberos) auth source from the DSN/environment. The
+	// kine-specific parameters (krb5_keytab, krb5_ccache) are dropped from the
+	// query so they are not forwarded to PostgreSQL as runtime parameters.
+	krb, err = kerberosAuthFromDSN(queryMap)
+	if err != nil {
+		return "", krbAuth{}, err
+	}
+
 	// set up tls dsn
 	params := url.Values{}
 	sslmode := ""
@@ -286,12 +363,99 @@ func prepareConfig(dataSourceName string, tlsInfo tls.Config) (*pgx.ConnConfig, 
 		params.Add(k, v[0])
 	}
 	u.RawQuery = params.Encode()
-	config, err := pgx.ParseConfig(u.String())
-	if err != nil {
-		return nil, err
+	return u.String(), krb, nil
+}
+
+// kerberosAuthFromDSN derives the GSSAPI auth source from the parsed DSN query,
+// deleting the kine-specific parameters it consumes. Selection order:
+//
+//  1. krb5_keytab and krb5_ccache are mutually exclusive; setting both is an
+//     error.
+//  2. krb5_ccache (any value, including empty) selects credential-cache mode.
+//  3. A non-empty krb5_keytab selects keytab mode.
+//  4. Otherwise KRB5_KTNAME, when set, selects keytab mode.
+//  5. Otherwise GSSAPI is disabled.
+func kerberosAuthFromDSN(queryMap url.Values) (krbAuth, error) {
+	keytab, hasKeytab := dsnParam(queryMap, keytabParam)
+	ccache, hasCCache := dsnParam(queryMap, ccacheParam)
+
+	switch {
+	case hasKeytab && hasCCache:
+		return krbAuth{}, fmt.Errorf("postgres DSN sets both %q and %q; specify at most one Kerberos credential source", keytabParam, ccacheParam)
+	case hasCCache:
+		return krbAuth{mode: krbCCache, ccache: ccache}, nil
+	case keytab != "":
+		return krbAuth{mode: krbKeytab, keytab: keytab}, nil
 	}
-	config.DialFunc = dialer.CachingDialer.DialContext
-	return config, nil
+
+	// No explicit DSN selector (or an empty krb5_keytab): fall back to the
+	// KRB5_KTNAME environment variable, which enables keytab mode when set.
+	if keytab := keytabFromEnv(); keytab != "" {
+		return krbAuth{mode: krbKeytab, keytab: keytab}, nil
+	}
+	return krbAuth{mode: krbDisabled}, nil
+}
+
+// dsnParam returns the first value of key and whether it was present, deleting
+// it from q. A present-but-empty parameter (e.g. "krb5_ccache" with no value)
+// returns ("", true), which the caller can distinguish from an absent one.
+func dsnParam(q url.Values, key string) (value string, present bool) {
+	v, ok := q[key]
+	if !ok {
+		return "", false
+	}
+	delete(q, key)
+	return v[0], true
+}
+
+// keytabFromEnv returns the Kerberos keytab path from the KRB5_KTNAME
+// environment variable, stripping an optional "FILE:" type prefix (the standard
+// KRB5_KTNAME residual format). It returns "" when the variable is unset. When
+// the variable is set but resolves to an empty path (e.g. "" or a bare "FILE:"
+// prefix) it logs a warning and returns "", since that is almost always a
+// misconfiguration of an operator who intended to enable GSSAPI authentication.
+func keytabFromEnv() string {
+	v, ok := os.LookupEnv(keytabEnvVar)
+	if !ok {
+		return ""
+	}
+	keytab := strings.TrimPrefix(v, "FILE:")
+	if keytab == "" {
+		logrus.Warnf("environment variable %s is set (%q) but resolves to an empty keytab path; ignoring it for GSSAPI (Kerberos) authentication", keytabEnvVar, v)
+		return ""
+	}
+	return keytab
+}
+
+// ensureLockTimeout sets the default lock_timeout on every connection (via pgx RuntimeParams),
+// unless the operator already supplied one through the DSN. See defaultLockTimeout for the rationale.
+func ensureLockTimeout(config *pgx.ConnConfig) {
+	if config.RuntimeParams == nil {
+		config.RuntimeParams = map[string]string{}
+	}
+	if _, ok := config.RuntimeParams["lock_timeout"]; ok {
+		return // operator-provided value in the DSN takes precedence
+	}
+	// Postgres expects the bare value in milliseconds.
+	config.RuntimeParams["lock_timeout"] = strconv.FormatInt(defaultLockTimeout.Milliseconds(), 10)
+}
+
+func prepareOptions(cfg *drivers.Config) []stdlib.OptionOpenDB {
+	var opts []stdlib.OptionOpenDB
+	if cfg.TokenSource != nil {
+		opts = append(opts, stdlib.OptionBeforeConnect(func(ctx context.Context, config *pgx.ConnConfig) error {
+			token, err := cfg.TokenSource(ctx, identity.Config{
+				Endpoint: config.Host + ":" + strconv.Itoa(int(config.Port)),
+				User:     config.User,
+			})
+			if err != nil {
+				return err
+			}
+			config.Password = token
+			return nil
+		}))
+	}
+	return opts
 }
 
 func init() {

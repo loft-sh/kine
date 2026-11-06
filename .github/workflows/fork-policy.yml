@@ -1,0 +1,111 @@
+name: Fork policy
+
+# Enforces the loft-sh/kine fork branching and commit conventions.
+#
+# Rules (see README "Fork policy"):
+#   - Fork commits use Conventional Commits with the literal scope `fork`,
+#     e.g. `feat(fork): ...`.
+#   - PRs based on master/main may NOT contain product `(fork)` commits
+#     (feat/fix/perf/refactor). Tooling `(fork)` commits (ci/chore/docs/...)
+#     are allowed there only when every changed file is in the tooling
+#     allowlist. Non-fork commits (upstream syncs) are always allowed.
+#   - PRs based on release/vcluster/v* must consist solely of Conventional
+#     Commits carrying the `fork` scope.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  commit-policy:
+    name: Check fork commit policy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validate commits against fork policy
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+
+          # Conventional Commit types, and the subset we treat as "product".
+          types='feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert'
+          product_types='feat|fix|perf|refactor'
+          subject_re="^(${types})(\(([a-z0-9/_-]+)\))?(!)?: .+"
+
+          # A changed file is "tooling" if it matches the allowlist below.
+          is_tooling_path() {
+            case "$1" in
+              .github/*|updatecli/*|docs/*) return 0 ;;
+              README.md|CONTRIBUTING.md|Dockerfile.release|.golangci.json) return 0 ;;
+              *) return 1 ;;
+            esac
+          }
+
+          violations=0
+          fail() { echo "::error::$1"; violations=$((violations + 1)); }
+
+          echo "Base branch: ${BASE_REF}"
+          echo "Range: ${BASE_SHA}..${HEAD_SHA}"
+          echo
+
+          while IFS= read -r sha; do
+            [ -z "$sha" ] && continue
+            subject="$(git show -s --format=%s "$sha")"
+            short="$(git rev-parse --short "$sha")"
+
+            ctype=""
+            cscope=""
+            conventional=0
+            if [[ "$subject" =~ $subject_re ]]; then
+              ctype="${BASH_REMATCH[1]}"
+              cscope="${BASH_REMATCH[3]}"
+              conventional=1
+            fi
+            is_fork=0
+            [ "$cscope" = "fork" ] && is_fork=1
+
+            case "$BASE_REF" in
+              master|main)
+                if [ "$is_fork" -eq 1 ]; then
+                  if [[ "$ctype" =~ ^(${product_types})$ ]]; then
+                    fail "$short \"$subject\": product (fork) commits are not allowed in PRs targeting ${BASE_REF}; they belong on a release/vcluster/v* branch."
+                  else
+                    while IFS= read -r f; do
+                      [ -z "$f" ] && continue
+                      if ! is_tooling_path "$f"; then
+                        fail "$short \"$subject\": tooling (fork) commit changes non-tooling path '$f'; not allowed in PRs targeting ${BASE_REF}."
+                        break
+                      fi
+                    done < <(git show --name-only --format= "$sha")
+                  fi
+                fi
+                ;;
+              release/vcluster/v*)
+                if [ "$conventional" -eq 0 ] || [ "$is_fork" -eq 0 ]; then
+                  fail "$short \"$subject\": commits on release/vcluster/v* PRs must be Conventional Commits with the 'fork' scope, e.g. 'feat(fork): ...'."
+                fi
+                ;;
+              *)
+                : # no gating on other base branches
+                ;;
+            esac
+          done < <(git rev-list --no-merges "${BASE_SHA}..${HEAD_SHA}")
+
+          if [ "$violations" -gt 0 ]; then
+            echo
+            echo "Fork commit policy: ${violations} violation(s) found."
+            exit 1
+          fi
+          echo "Fork commit policy: OK"

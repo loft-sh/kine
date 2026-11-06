@@ -93,13 +93,11 @@ func newBackend(ctx context.Context, wg *sync.WaitGroup, connection string, tlsI
 		// Start the server.
 		go ns.Start()
 
-		wg.Add(1)
-		go func() {
+		wg.Go(func() {
 			<-ctx.Done()
 			ns.Shutdown()
 			logrus.Infof("embedded NATS server shutdown")
-			wg.Done()
-		}()
+		})
 
 		logrus.Infof("started embedded NATS server")
 		time.Sleep(100 * time.Millisecond)

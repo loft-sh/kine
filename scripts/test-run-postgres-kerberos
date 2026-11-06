@@ -1,0 +1,10 @@
+#!/bin/bash
+# Runs the Kerberos/PostgreSQL e2e suite: a kind cluster with an MIT Kerberos
+# KDC, a GSSAPI-configured PostgreSQL, and kine authenticating with a mounted
+# keytab. Unlike the other scripts/test-run-* backends (bash + Docker), this
+# wraps the Go/Ginkgo suite under e2e/. Requires docker, kind, and kubectl.
+set -e
+
+cd "$(dirname "$0")/.."
+
+exec env -C e2e go test -timeout 25m -run TestRunKineE2E ./... -args --ginkgo.v "$@"
