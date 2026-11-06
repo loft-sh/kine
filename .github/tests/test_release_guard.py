@@ -27,7 +27,7 @@ def test_publisher_and_guard_contract():
     assert path.name == "release.yml"
     assert workflow["on"] == {"push": {"tags": ["v*.vcluster.*"]}}
     assert workflow["concurrency"] == {
-        "group": "release-${{ github.ref_name }}", "cancel-in-progress": "false"}
+        "group": "release-fork-images", "cancel-in-progress": "false"}
     guards = [(i, step) for i, step in enumerate(steps) if step.get("uses") == GUARD]
     assert len(guards) == 1
     index, guard = guards[0]
@@ -40,3 +40,52 @@ def test_publisher_and_guard_contract():
                 immutable.add(tag.strip())
     assert immutable
     assert set(guard["with"]["images"].splitlines()) == immutable
+
+
+def test_latest_promotion_contract():
+    workflow = load(WORKFLOWS / "release.yml")
+    steps = workflow["jobs"]["release"]["steps"]
+    decision = next(i for i, step in enumerate(steps) if step.get("id") == "latest")
+    build = next(i for i, step in enumerate(steps) if step.get("id") == "build")
+    assert decision < build
+    assert steps[decision]["run"] == "python3 .github/scripts/latest_release.py"
+    assert "steps.latest.outputs.latest == 'true'" in steps[build]["with"]["tags"]
+
+
+def test_latest_version_ordering():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("latest_release", ROOT / ".github/scripts/latest_release.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    def refs(*tags):
+        return "\n".join(f"{'a' * 40}\trefs/tags/{tag}" for tag in tags)
+
+    assert module.promote("v0.17.2.vcluster.0", refs("v0.16.5.vcluster.1", "v0.17.2.vcluster.0"))
+    assert not module.promote("v0.16.5.vcluster.1", refs("v0.16.5.vcluster.1", "v0.17.2.vcluster.0"))
+    assert not module.promote("v0.17.2.vcluster.0", refs("v0.17.2.vcluster.0", "v0.17.2.vcluster.1"))
+    assert module.promote("v0.17.2.vcluster.1", refs("v0.17.2.vcluster.1", "v0.18.0.vcluster.0-rc.1"))
+    assert not module.promote("v0.18.0.vcluster.0-rc.1", refs("v0.18.0.vcluster.0-rc.1"))
+    import pytest
+    with pytest.raises(ValueError):
+        module.promote("v0.17.2.vcluster.0", refs("v0.16.5.vcluster.1"))
+
+
+def test_remote_lookup_failure_stops_promotion(monkeypatch, tmp_path):
+    import importlib.util
+    import subprocess
+    import pytest
+    spec = importlib.util.spec_from_file_location("latest_release", ROOT / ".github/scripts/latest_release.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    output = tmp_path / "output"
+    monkeypatch.setenv("TAG", "v0.17.2.vcluster.0")
+    monkeypatch.setenv("GITHUB_OUTPUT", str(output))
+
+    def fail(*args, **kwargs):
+        raise subprocess.CalledProcessError(1, "git ls-remote")
+
+    monkeypatch.setattr(module.subprocess, "run", fail)
+    with pytest.raises(subprocess.CalledProcessError):
+        module.main()
+    assert not output.exists()
