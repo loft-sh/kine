@@ -1,26 +1,56 @@
-name: release
+name: Release
 
+# The only workflow that publishes a fork release. Push a vX.Y.Z.vcluster.N
+# tag: the job builds and attests the binaries and images, uploads the
+# binaries to a draft release, and publishes the release last. Do not create
+# the release in the UI first; a published release fails the run, because its
+# assets must not change after publication.
 on:
-  release:
-    types:
-      - created
+  push:
+    tags:
+      - 'v*.vcluster.*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-fork-images
+  cancel-in-progress: false
 
 jobs:
   release:
+    name: Release
     runs-on: ubuntu-latest
     env:
       ARCH: amd64
       TAG: ${{ github.ref_name }}
+      GH_REPO: ${{ github.repository }}
     permissions:
-      contents: write # Needed to update release with binary assets
+      contents: write # Needed to create the draft release and upload binary assets
       packages: write # Needed for GHCR image push
-      id-token: write # needed for the Vault authentication
+      id-token: write # Needed for the attestation signing certificate
+      attestations: write # Needed for attest action and attestation upload to GHCR
     steps:
+      - name: Check immutable image tags
+        uses: loft-sh/github-actions/.github/actions/ghcr-tag-guard@ghcr-tag-guard/v1 # zizmor: ignore[unpinned-uses] internal action version tag
+        with:
+          images: |
+            ghcr.io/${{ github.repository_owner }}/kine:${{ github.ref_name }}
+
+      - name: Validate release tag name
+        run: |
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+\.vcluster\.[0-9]+$ ]]; then
+            echo "::error::Release tag '$TAG' does not match the vX.Y.Z.vcluster.N scheme"
+            exit 1
+          fi
+
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4
 
       - name: Build binaries
         run: make multi-arch-build
@@ -32,58 +62,72 @@ jobs:
           for a in "${arch[@]}"; do
             sha256sum kine-"${a}" > sha256sum-"${a}".txt
           done
-          
-      - name: Upload binaries to release
-        uses: softprops/action-gh-release@v2.3.3 # https://github.com/softprops/action-gh-release/issues/587
-        with:
-          files: |
-            dist/artifacts/kine-*
-            dist/artifacts/*.txt
 
-      - name: "Read Vault secrets"
-        if: github.repository_owner == 'k3s-io'
-        uses: rancher-eio/read-vault-secrets@main
+      - name: Attest binaries
+        uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26 # v4
         with:
-          secrets: |
-            secret/data/github/repo/${{ github.repository }}/dockerhub/rancher/credentials username | DOCKER_USERNAME ;
-            secret/data/github/repo/${{ github.repository }}/dockerhub/rancher/credentials password | DOCKER_TOKEN ;
-    
-      - name: Login to DockerHub with Rancher Secrets
-        if: github.repository_owner == 'k3s-io'
-        uses: docker/login-action@v3
-        with:
-          username: ${{ env.DOCKER_USERNAME }}
-          password: ${{ env.DOCKER_TOKEN }}
+          subject-path: dist/artifacts/kine-*
+
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if draft=$(gh release view "$TAG" --json isDraft --jq .isDraft 2>/dev/null); then
+            if [[ "$draft" != "true" ]]; then
+              echo "::error::Release $TAG was published before this run; fork releases start from a tag push only. No assets means it was created in the UI: delete it, keep the tag, and re-run this workflow. With assets it is already released: cut a new tag."
+              exit 1
+            fi
+            echo "Reusing draft release $TAG"
+            exit 0
+          fi
+          # Changelog from the previous fork release on this line, as the UI did.
+          n="${TAG##*.vcluster.}"
+          prev="${TAG%.*}.$((n - 1))"
+          start=()
+          if (( n > 0 )) && gh api "repos/$GH_REPO/git/ref/tags/$prev" >/dev/null 2>&1; then
+            start=(--notes-start-tag "$prev")
+          fi
+          gh release create "$TAG" --draft --verify-tag --title "$TAG" --generate-notes "${start[@]}"
+
+      - name: Upload binaries to draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$TAG" dist/artifacts/kine-* dist/artifacts/*.txt --clobber
 
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
         with:
           registry: ghcr.io
-          username: ${{ github.repository_owner }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
 
-      - name: Build and push (k3s-io)
-        if: github.repository_owner == 'k3s-io'
-        uses: docker/build-push-action@v6
+      - name: Decide latest promotion
+        id: latest
+        run: python3 .github/scripts/latest_release.py
+
+      - name: Build and push
+        uses: docker/build-push-action@d08e5c354a6adb9ed34480a06d141179aa583294 # v7
+        id: build
         with:
           platforms: linux/amd64,linux/arm64,linux/arm/v7
           context: .
           target: multi-arch-package
           push: true
+          sbom: true
+          provenance: mode=max
           tags: |
-            rancher/kine:latest
-            rancher/kine:${{ github.ref_name }}
-            ghcr.io/${{ github.repository_owner }}/kine:latest
+            ${{ steps.latest.outputs.latest == 'true' && format('ghcr.io/{0}/kine:latest', github.repository_owner) || '' }}
             ghcr.io/${{ github.repository_owner }}/kine:${{ github.ref_name }}
 
-      - name: Build and push (forks)
-        if: github.repository_owner != 'k3s-io'
-        uses: docker/build-push-action@v6
+      - name: Attest images
+        uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26 # v4
+        id: attest
         with:
-          platforms: linux/amd64,linux/arm64,linux/arm/v7
-          context: .
-          target: multi-arch-package
-          push: true
-          tags: |
-            ghcr.io/${{ github.repository_owner }}/kine:latest
-            ghcr.io/${{ github.repository_owner }}/kine:${{ github.ref_name }}
+          subject-name: ghcr.io/${{ github.repository_owner }}/kine
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release edit "$TAG" --draft=false
