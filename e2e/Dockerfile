@@ -3,7 +3,7 @@
 # context is the repository root. Produces a musl-static binary so it runs on a
 # minimal Alpine runtime and so the krb5 provider's user.Current() reads
 # /etc/passwd directly (no glibc NSS surprises).
-FROM golang:1.25-alpine3.22 AS build
+FROM golang:1.26.10-alpine3.24 AS build
 RUN apk add --no-cache gcc musl-dev git ca-certificates
 WORKDIR /src
 COPY go.mod go.sum ./
