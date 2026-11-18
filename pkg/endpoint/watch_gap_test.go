@@ -50,6 +50,7 @@ func TestWatchGapDoesNotStallPostgres(t *testing.T) {
 		CompactMinRetain:    1000,
 		CompactBatchSize:    1000,
 		PollBatchSize:       500,
+		PollInterval:        time.Second,
 	})
 	if err != nil {
 		t.Fatalf("start kine: %v", err)
